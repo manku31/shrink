@@ -1,12 +1,13 @@
+import { connection } from "next/server";
 import { query } from "@/lib/db";
 
-// Verifies the app can reach Neon Postgres. Returns no connection details.
+// Liveness check: confirms the app can reach Postgres. Deliberately returns nothing
+// about the database (name, version, host), since this route is public.
 export async function GET() {
+  await connection();
   try {
-    const { rows } = await query<{ ok: number; db: string; version: string }>(
-      "select 1 as ok, current_database() as db, version() as version",
-    );
-    return Response.json({ status: "ok", database: rows[0].db, version: rows[0].version });
+    await query("select 1");
+    return Response.json({ status: "ok" });
   } catch (err) {
     console.error("DB health check failed:", err);
     return Response.json({ status: "error" }, { status: 503 });

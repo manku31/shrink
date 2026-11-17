@@ -10,6 +10,10 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: isDev ? devHosts : [],
   experimental: {
     agentFeedback: true,
+    // Reuse a visited page from the browser's router cache for 30s, so going back to a page (or
+    // switching tabs in the sidebar) is instant instead of a ~250ms round trip to the server.
+    // Any server action (create / edit / delete) clears this cache, so changes still show immediately.
+    staleTimes: { dynamic: 30, static: 180 },
     serverActions: {
       // Server Action POSTs compare the Origin host (with port) to the request host.
       allowedOrigins: isDev ? devHosts.flatMap((h) => [h, `${h}:3000`]) : [],

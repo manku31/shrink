@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { and, desc, eq } from "drizzle-orm";
 import { headers } from "next/headers";
+import { connection } from "next/server";
 import { requireAdmin } from "@/lib/dal";
 import { getDb } from "@/lib/db";
 import { links, users } from "@/db/schema";
@@ -15,6 +16,7 @@ export const instant = false;
 export const metadata: Metadata = { title: "Admin – Shrink" };
 
 export default async function AdminPage() {
+  await connection(); // request-time page: opt out of prerendering before touching the DB
   // Auth check and both queries run in parallel (one round trip instead of three).
   // Never select password_hash.
   const [admin, allUsers, allLinks] = await Promise.all([
