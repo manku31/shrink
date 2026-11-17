@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { AuthShell } from "../../components/auth-shell";
 import { AuthForm } from "../../components/auth-form";
 
-export const metadata: Metadata = { title: "Sign up – TaskFlow" };
+export const metadata: Metadata = { title: "Sign up – Shrink" };
 
 export default function SignupPage() {
   return (

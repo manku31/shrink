@@ -1,6 +1,8 @@
 import "server-only";
 import { Pool } from "pg";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { attachDatabasePool } from "@vercel/functions";
+import * as schema from "@/db/schema";
 
 // Pooled Neon connection (PgBouncer). Server-only: credentials must never reach the client.
 // Use DATABASE_URL_UNPOOLED instead for migrations, pg_dump, LISTEN/NOTIFY.
@@ -21,6 +23,8 @@ export function getPool(): Pool {
   // Reuse across hot reloads in dev; module scope is enough in production.
   return (globalForDb.pgPool ??= createPool());
 }
+
+export const getDb = () => drizzle(getPool(), { schema });
 
 export const query = <T extends object = Record<string, unknown>>(text: string, params?: unknown[]) =>
   getPool().query<T>(text, params);
