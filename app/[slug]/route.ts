@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { linkClicks, links, users } from "@/db/schema";
@@ -18,12 +18,15 @@ export async function GET(request: Request, { params }: { params: Promise<{ slug
     )
     .returning({ id: links.id, targetUrl: links.targetUrl });
   if (!link) return new NextResponse("Short link not found", { status: 404 });
-  // Record the click for analytics. Never let a logging failure break the redirect.
-  try {
-    await getDb().insert(linkClicks).values({ linkId: link.id });
-  } catch (err) {
-    console.error("Click log failed:", err);
-  }
+  // Record the click for analytics after the redirect is sent, so it adds no latency.
+  // Never let a logging failure break the redirect.
+  after(async () => {
+    try {
+      await getDb().insert(linkClicks).values({ linkId: link.id });
+    } catch (err) {
+      console.error("Click log failed:", err);
+    }
+  });
   // 307 (temporary) so browsers don't cache it and skip click counting.
   return NextResponse.redirect(link.targetUrl, 307);
 }

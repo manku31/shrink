@@ -15,21 +15,22 @@ export const instant = false;
 export const metadata: Metadata = { title: "Admin – Shrink" };
 
 export default async function AdminPage() {
-  const admin = await requireAdmin(); // not signed in -> /login, normal user -> /dashboard
+  // Auth check and both queries run in parallel (one round trip instead of three).
   // Never select password_hash.
-  const allUsers = await getDb()
-    .select({ id: users.id, username: users.username, email: users.email, role: users.role, createdAt: users.createdAt })
-    .from(users)
-    .where(eq(users.isActive, true))
-    .orderBy(desc(users.createdAt));
-  const allLinks = (
-    await getDb()
+  const [admin, allUsers, allLinks] = await Promise.all([
+    requireAdmin(), // not signed in -> /login, normal user -> /dashboard
+    getDb()
+      .select({ id: users.id, username: users.username, email: users.email, role: users.role, createdAt: users.createdAt })
+      .from(users)
+      .where(eq(users.isActive, true))
+      .orderBy(desc(users.createdAt)),
+    getDb()
       .select({ id: links.id, name: links.name, slug: links.slug, targetUrl: links.targetUrl, clicks: links.clicks, createdAt: links.createdAt, owner: users.username })
       .from(links)
       .innerJoin(users, eq(links.userId, users.id))
       .where(and(eq(links.isActive, true), eq(users.isActive, true)))
-      .orderBy(desc(links.createdAt))
-  );
+      .orderBy(desc(links.createdAt)),
+  ]);
   const h = await headers();
   const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
   const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");

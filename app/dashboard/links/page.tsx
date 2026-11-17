@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { requireUser } from "@/lib/dal";
+import { requireUserWith } from "@/lib/dal";
 import { getOrigin } from "@/lib/origin";
 import { searchLinks } from "@/lib/stats";
 import { LINK_FILTERS, LINK_SORTS, type LinkFilter, type LinkSort } from "@/lib/link-options";
@@ -16,15 +16,17 @@ export const metadata: Metadata = { title: "Links – Shrink" };
 const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? "";
 
 export default async function LinksPage({ searchParams }: PageProps<"/dashboard/links">) {
-  const user = await requireUser();
   const sp = await searchParams;
   const q = first(sp.q).slice(0, 100);
   const sort = (LINK_SORTS.some((o) => o.value === first(sp.sort)) ? first(sp.sort) : "newest") as LinkSort;
   const filter = (LINK_FILTERS.some((o) => o.value === first(sp.filter)) ? first(sp.filter) : "all") as LinkFilter;
   const page = Math.max(1, parseInt(first(sp.page), 10) || 1);
 
-  const { rows, matching, total, totalClicks, page: current, pages } = await searchLinks(user.id, { q, sort, filter, page });
-  const { host, proto } = await getOrigin();
+  const [[user, result], { host, proto }] = await Promise.all([
+    requireUserWith((id) => searchLinks(id, { q, sort, filter, page })),
+    getOrigin(),
+  ]);
+  const { rows, matching, total, totalClicks, page: current, pages } = result;
   const filtered = Boolean(q.trim()) || filter !== "all";
 
   const pageHref = (p: number) => {
@@ -63,7 +65,7 @@ export default async function LinksPage({ searchParams }: PageProps<"/dashboard/
             No links match your search.
           </div>
         ) : (
-          <LinksTable rows={rows} host={host} proto={proto} detailHref={(id) => `/dashboard/links/${id}`} editHref={(id) => `/dashboard/links/${id}/edit`} />
+          <LinksTable rows={rows} host={host} proto={proto} detailHref={(id) => `/dashboard/links/${id}`} editable />
         )}
 
         {pages > 1 && (

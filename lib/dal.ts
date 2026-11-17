@@ -32,15 +32,28 @@ export function homePathFor(role: SessionUser["role"]) {
 /** For the normal user dashboard. Admins are sent to the admin dashboard. */
 export async function requireUser(): Promise<SessionUser> {
   const user = await getCurrentUser();
-  if (!user) redirect("/login");
+  if (!user) redirect("/login?expired=1");
   if (user.role === "admin") redirect("/admin");
   return user;
+}
+
+/**
+ * requireUser() + page data in one round trip. The session cookie already carries the user id,
+ * so the page queries start immediately instead of waiting for the user lookup.
+ * Auth is still enforced by requireUser(); if it redirects, the early result is discarded.
+ */
+export async function requireUserWith<T>(load: (userId: string) => Promise<T>): Promise<[SessionUser, T]> {
+  const sid = await getSessionUserId();
+  const early = sid ? load(sid).then((value) => ({ value }), () => null) : null;
+  const user = await requireUser();
+  const hit = early ? await early : null;
+  return [user, hit ? hit.value : await load(user.id)];
 }
 
 /** For admin-only pages. Normal users are sent to their own dashboard. */
 export async function requireAdmin(): Promise<SessionUser> {
   const user = await getCurrentUser();
-  if (!user) redirect("/login");
+  if (!user) redirect("/login?expired=1");
   if (user.role !== "admin") redirect("/dashboard");
   return user;
 }

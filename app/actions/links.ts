@@ -112,5 +112,5 @@ export async function updateLink(id: string, _prev: LinkState, formData: FormDat
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/links");
   revalidatePath("/admin");
-  redirect("/dashboard/links");
+  return { success: true, slug: alias, values };
 }

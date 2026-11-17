@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useEffect, useRef } from "react";
-import { deleteLink } from "../actions/links";
 import { CopyButton } from "./copy-button";
+import { DeleteButton } from "./row-actions";
+import { EditLinkModal } from "./edit-link-modal";
 
 type Props = {
   id: string;
@@ -18,7 +19,7 @@ type Props = {
   showLast: boolean;
   owner?: string;
   detailHref?: string;
-  editHref?: string;
+  editable?: boolean;
   className?: string;
 };
 
@@ -100,17 +101,8 @@ export function LinkDetailsModal(p: Props) {
                 View stats
               </Link>
             )}
-            {p.editHref && (
-              <Link href={p.editHref} className="rounded-md border border-zinc-300 px-3 py-2 text-xs font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800">
-                Edit
-              </Link>
-            )}
-            <form action={deleteLink} onSubmit={close}>
-              <input type="hidden" name="id" value={p.id} />
-              <button type="submit" className="rounded-md border border-red-200 px-3 py-2 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 dark:border-red-500/30 dark:text-red-400 dark:hover:bg-red-500/10">
-                Delete
-              </button>
-            </form>
+            {p.editable && <EditLinkModal id={p.id} host={p.host} variant="text" initial={{ name: p.name ?? "", url: p.targetUrl, slug: p.slug }} />}
+            <DeleteButton id={p.id} variant="text" onDone={close} />
           </div>
         </div>
       </dialog>

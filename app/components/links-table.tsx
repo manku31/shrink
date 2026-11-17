@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { deleteLink } from "../actions/links";
-import { CopyButton } from "./copy-button";
+import { CopyIconButton, DeleteButton } from "./row-actions";
+import { EditLinkModal } from "./edit-link-modal";
 import { LinkDetailsModal } from "./link-details-modal";
 
 export type LinkRow = {
@@ -14,39 +14,15 @@ export type LinkRow = {
   lastClickedAt?: Date | null;
 };
 
+export { DeleteButton };
+
 const day = (d: Date) => d.toISOString().slice(0, 10);
 
-export function DeleteButton({ id, redirectTo }: { id: string; redirectTo?: string }) {
-  return (
-    <form action={deleteLink}>
-      <input type="hidden" name="id" value={id} />
-      {redirectTo && <input type="hidden" name="redirectTo" value={redirectTo} />}
-      <button
-        type="submit"
-        className="rounded-md border border-red-200 px-3 py-2 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 dark:border-red-500/30 dark:text-red-400 dark:hover:bg-red-500/10 md:px-2.5 md:py-1"
-      >
-        Delete
-      </button>
-    </form>
-  );
-}
-
-function EditLink({ href }: { href: string }) {
-  return (
-    <Link
-      href={href}
-      className="rounded-md border border-zinc-300 px-3 py-2 text-xs font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 md:px-2.5 md:py-1"
-    >
-      Edit
-    </Link>
-  );
-}
-
 function NameModal({
-  r, host, short, detailHref, editHref, className,
+  r, host, short, detailHref, editable, className,
 }: {
   r: LinkRow; host: string; short: string;
-  detailHref?: (id: string) => string; editHref?: (id: string) => string; className?: string;
+  detailHref?: (id: string) => string; editable?: boolean; className?: string;
 }) {
   return (
     <LinkDetailsModal
@@ -62,7 +38,7 @@ function NameModal({
       showLast={"lastClickedAt" in r}
       owner={r.owner}
       detailHref={detailHref?.(r.id)}
-      editHref={editHref?.(r.id)}
+      editable={editable}
       className={className}
     />
   );
@@ -73,7 +49,7 @@ export function LinksTable({
   host,
   proto,
   detailHref,
-  editHref,
+  editable,
 }: {
   rows: LinkRow[];
   host: string;
@@ -81,7 +57,7 @@ export function LinksTable({
   /** When set, each row links to its detail page. */
   detailHref?: (id: string) => string;
   /** When set, each row gets an Edit action. */
-  editHref?: (id: string) => string;
+  editable?: boolean;
 }) {
   if (rows.length === 0) {
     return (
@@ -101,7 +77,7 @@ export function LinksTable({
             <li key={r.id} className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
               {r.name && (
                 <div className="mb-0.5 text-base">
-                  <NameModal r={r} host={host} short={short} detailHref={detailHref} editHref={editHref} className="max-w-full break-words text-left font-semibold hover:text-indigo-600 hover:underline dark:hover:text-indigo-400" />
+                  <NameModal r={r} host={host} short={short} detailHref={detailHref} editable={editable} className="max-w-full break-words text-left font-semibold hover:text-indigo-600 hover:underline dark:hover:text-indigo-400" />
                 </div>
               )}
               {detailHref ? (
@@ -126,7 +102,7 @@ export function LinksTable({
                 <span>Created {day(r.createdAt)}</span>
                 {showOwner && r.owner && <span>by {r.owner}</span>}
               </p>
-              <div className="mt-3 flex gap-2">
+              <div className="mt-3 flex items-center gap-2">
                 {detailHref && (
                   <Link
                     href={detailHref(r.id)}
@@ -135,8 +111,8 @@ export function LinksTable({
                     Details
                   </Link>
                 )}
-                <CopyButton text={short} />
-                {editHref && <EditLink href={editHref(r.id)} />}
+                <CopyIconButton text={short} />
+                {editable && <EditLinkModal id={r.id} host={host} initial={{ name: r.name ?? "", url: r.targetUrl, slug: r.slug }} />}
                 <DeleteButton id={r.id} />
               </div>
             </li>
@@ -163,7 +139,7 @@ export function LinksTable({
               return (
                 <tr key={r.id}>
                   <td className="max-w-[14rem] px-4 py-3">
-                    <NameModal r={r} host={host} short={short} detailHref={detailHref} editHref={editHref} />
+                    <NameModal r={r} host={host} short={short} detailHref={detailHref} editable={editable} />
                   </td>
                   <td className="px-4 py-3 font-medium">
                     {detailHref ? (
@@ -180,9 +156,9 @@ export function LinksTable({
                   <td className="px-4 py-3 tabular-nums">{r.clicks}</td>
                   <td className="whitespace-nowrap px-4 py-3 text-zinc-600 dark:text-zinc-400">{day(r.createdAt)}</td>
                   <td className="px-4 py-3">
-                    <div className="flex justify-end gap-2">
-                      <CopyButton text={short} />
-                      {editHref && <EditLink href={editHref(r.id)} />}
+                    <div className="flex items-center justify-end gap-1.5">
+                      <CopyIconButton text={short} />
+                      {editable && <EditLinkModal id={r.id} host={host} initial={{ name: r.name ?? "", url: r.targetUrl, slug: r.slug }} />}
                       <DeleteButton id={r.id} />
                     </div>
                   </td>

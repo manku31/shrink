@@ -19,12 +19,17 @@ async function hasValidSession(request: NextRequest) {
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const isAuthPage = pathname === "/login" || pathname === "/signup";
+  const isLanding = pathname === "/";
   const signedIn = await hasValidSession(request);
 
-  if (!signedIn && !isAuthPage) {
+  // A valid cookie whose user no longer exists / was deactivated is sent here by lib/dal.ts.
+  // Let them reach the login page instead of bouncing back to the dashboard in a loop.
+  if (isAuthPage && request.nextUrl.searchParams.has("expired")) return NextResponse.next();
+
+  if (!signedIn && !isAuthPage && !isLanding) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
-  if (signedIn && isAuthPage) {
+  if (signedIn && (isAuthPage || isLanding)) {
     // /dashboard sends admins on to /admin
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
@@ -32,5 +37,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/login", "/signup", "/dashboard/:path*", "/admin/:path*"],
+  matcher: ["/", "/login", "/signup", "/dashboard/:path*", "/admin/:path*"],
 };

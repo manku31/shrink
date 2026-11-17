@@ -13,9 +13,20 @@ function createPool() {
   if (!connectionString) {
     throw new Error("DATABASE_URL is not set. Run `neon env pull`.");
   }
-  const pool = new Pool({ connectionString });
+  const pool = new Pool({
+    connectionString,
+    // A fresh TLS connection to Neon costs ~1.5s, so keep warm connections around instead of
+    // closing them after pg's 10s default. Keep-alive stops idle sockets being silently dropped.
+    idleTimeoutMillis: 5 * 60_000,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
+    max: 10,
+  });
   // Lets Vercel Fluid compute close idle connections before an instance is suspended.
   attachDatabasePool(pool);
+  // Pre-open a few connections in the background so the first (parallel) page queries don't each
+  // pay the ~1.5s connect cost.
+  void Promise.all([0, 1, 2].map(() => pool.query("select 1"))).catch(() => {});
   return pool;
 }
 

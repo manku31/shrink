@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { requireUser } from "@/lib/dal";
+import { requireUserWith } from "@/lib/dal";
 import { getOrigin } from "@/lib/origin";
 import { getOverview } from "@/lib/stats";
 import { UserShell } from "../components/user-shell";
@@ -15,9 +15,9 @@ export const instant = false;
 export const metadata: Metadata = { title: "Overview – Shrink" };
 
 export default async function DashboardPage() {
-  const user = await requireUser(); // not signed in -> /login, admin -> /admin
-  const { host, proto } = await getOrigin();
-  const { links, series, totalClicks, periodClicks, topLinks, days } = await getOverview(user.id, 14);
+  // not signed in -> /login, admin -> /admin
+  const [[user, overview], { host, proto }] = await Promise.all([requireUserWith((id) => getOverview(id, 14)), getOrigin()]);
+  const { links, series, totalClicks, periodClicks, topLinks, days } = overview;
   const best = topLinks[0];
   const maxTop = best?.clicks ?? 1;
 

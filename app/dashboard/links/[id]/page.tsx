@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireUser } from "@/lib/dal";
+import { requireUserWith } from "@/lib/dal";
 import { getOrigin } from "@/lib/origin";
 import { getLinkDetail } from "@/lib/stats";
 import { UserShell } from "../../../components/user-shell";
@@ -15,12 +15,13 @@ export const instant = false;
 export const metadata: Metadata = { title: "Link details – Shrink" };
 
 export default async function LinkDetailPage({ params }: PageProps<"/dashboard/links/[id]">) {
-  const user = await requireUser();
   const { id } = await params;
-  const detail = await getLinkDetail(user.id, id, 30);
+  const [[user, detail], { host, proto }] = await Promise.all([
+    requireUserWith((uid) => getLinkDetail(uid, id, 30)),
+    getOrigin(),
+  ]);
   if (!detail) notFound();
   const { link, series, days, last7, periodClicks, recent } = detail;
-  const { host, proto } = await getOrigin();
   const short = `${proto}://${host}/${link.slug}`;
 
   return (
@@ -49,7 +50,7 @@ export default async function LinkDetailPage({ params }: PageProps<"/dashboard/l
           Open
         </a>
         <CopyButton text={short} />
-        <DeleteButton id={link.id} redirectTo="/dashboard/links" />
+        <DeleteButton id={link.id} redirectTo="/dashboard/links" variant="text" />
       </div>
 
       <div className="mt-5 grid grid-cols-2 gap-3 sm:mt-6 sm:gap-4 lg:grid-cols-4">

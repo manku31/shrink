@@ -7,7 +7,7 @@ export function DashboardShell({ user, children }: { user: SessionUser; children
     <div className="flex flex-1 flex-col bg-zinc-50 dark:bg-zinc-950">
       <header className="border-b border-zinc-200 bg-background pt-[env(safe-area-inset-top)] dark:border-zinc-800">
         <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between gap-2 px-4 sm:h-16 sm:px-6">
-          <Logo />
+          <Logo href="/admin" />
           <div className="flex items-center gap-2 sm:gap-3">
             <span className="hidden text-sm text-zinc-600 dark:text-zinc-400 sm:inline">{user.username}</span>
             <form action={logout}>
