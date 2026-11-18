@@ -1,10 +1,8 @@
 import "server-only";
 import { cache } from "react";
 import { redirect } from "next/navigation";
-import { and, eq } from "drizzle-orm";
-import { getDb } from "./db";
+import { prisma } from "./prisma";
 import { getSessionUserId } from "./session";
-import { users } from "@/db/schema";
 
 export type SessionUser = {
   id: string;
@@ -17,12 +15,10 @@ export type SessionUser = {
 export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
   const userId = await getSessionUserId();
   if (!userId) return null;
-  const [user] = await getDb()
-    .select({ id: users.id, username: users.username, email: users.email, role: users.role })
-    .from(users)
-    .where(and(eq(users.id, userId), eq(users.isActive, true)))
-    .limit(1);
-  return user ?? null;
+  return prisma.user.findFirst({
+    where: { id: userId, isActive: true },
+    select: { id: true, username: true, email: true, role: true },
+  });
 });
 
 export function homePathFor(role: SessionUser["role"]) {

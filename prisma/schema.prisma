@@ -1,0 +1,76 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// The two roles in the system.
+enum UserRole {
+  user
+  admin
+
+  @@map("user_role")
+}
+
+model User {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  username     String
+  email        String
+  // Store a hash (scrypt), never the plain-text password.
+  passwordHash String   @map("password_hash")
+  // Every new account is a normal user. Admins are promoted manually, never via sign-up.
+  role         UserRole @default(user)
+  // Soft delete: "deleting" a user just sets this to false. Rows are never removed.
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  links        Link[]
+
+  // NOTE: the database also has two expression indexes that Prisma cannot model:
+  //   CREATE UNIQUE INDEX users_username_lower_idx ON users (lower(username));
+  //   CREATE UNIQUE INDEX users_email_lower_idx    ON users (lower(email));
+  // They make usernames and emails unique regardless of letter case. They live in the
+  // migration SQL (prisma/migrations/0_init), not here.
+  @@map("users")
+}
+
+model Link {
+  id        String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String      @map("user_id") @db.Uuid
+  // Optional human-friendly label shown in the dashboard.
+  name      String?
+  // The short code in /{slug}. Case-sensitive, globally unique.
+  slug      String      @unique(map: "links_slug_idx")
+  targetUrl String      @map("target_url")
+  clicks    Int         @default(0)
+  // Soft delete: "deleting" a link just sets this to false. Rows are never removed.
+  isActive  Boolean     @default(true) @map("is_active")
+  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "links_user_id_users_id_fk")
+  clickLog  LinkClick[]
+
+  @@index([userId], map: "links_user_id_idx")
+  @@map("links")
+}
+
+// One row per redirect, so we can chart clicks over time. links.clicks stays as the fast total.
+model LinkClick {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  linkId    String   @map("link_id") @db.Uuid
+  clickedAt DateTime @default(now()) @map("clicked_at") @db.Timestamptz(6)
+  link      Link     @relation(fields: [linkId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "link_clicks_link_id_links_id_fk")
+
+  @@index([linkId, clickedAt], map: "link_clicks_link_time_idx")
+  @@map("link_clicks")
+}
+
+// Left over from the Neon quickstart. Kept so Prisma doesn't try to drop it.
+model PlayingWithNeon {
+  id    Int    @id @default(autoincrement())
+  name  String
+  value Float? @db.Real
+
+  @@map("playing_with_neon")
+}

@@ -1,10 +1,8 @@
 import type { Metadata } from "next";
-import { and, desc, eq } from "drizzle-orm";
 import { headers } from "next/headers";
 import { connection } from "next/server";
 import { requireAdmin } from "@/lib/dal";
-import { getDb } from "@/lib/db";
-import { links, users } from "@/db/schema";
+import { prisma } from "@/lib/prisma";
 import { DashboardShell } from "../components/dashboard-shell";
 import { deactivateUser } from "../actions/users";
 import { LinksTable } from "../components/links-table";
@@ -19,20 +17,20 @@ export default async function AdminPage() {
   await connection(); // request-time page: opt out of prerendering before touching the DB
   // Auth check and both queries run in parallel (one round trip instead of three).
   // Never select password_hash.
-  const [admin, allUsers, allLinks] = await Promise.all([
+  const [admin, allUsers, linkRows] = await Promise.all([
     requireAdmin(), // not signed in -> /login, normal user -> /dashboard
-    getDb()
-      .select({ id: users.id, username: users.username, email: users.email, role: users.role, createdAt: users.createdAt })
-      .from(users)
-      .where(eq(users.isActive, true))
-      .orderBy(desc(users.createdAt)),
-    getDb()
-      .select({ id: links.id, name: links.name, slug: links.slug, targetUrl: links.targetUrl, clicks: links.clicks, createdAt: links.createdAt, owner: users.username })
-      .from(links)
-      .innerJoin(users, eq(links.userId, users.id))
-      .where(and(eq(links.isActive, true), eq(users.isActive, true)))
-      .orderBy(desc(links.createdAt)),
+    prisma.user.findMany({
+      where: { isActive: true },
+      select: { id: true, username: true, email: true, role: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.link.findMany({
+      where: { isActive: true, user: { isActive: true } },
+      select: { id: true, name: true, slug: true, targetUrl: true, clicks: true, createdAt: true, user: { select: { username: true } } },
+      orderBy: { createdAt: "desc" },
+    }),
   ]);
+  const allLinks = linkRows.map(({ user, ...l }) => ({ ...l, owner: user.username }));
   const h = await headers();
   const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
   const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");

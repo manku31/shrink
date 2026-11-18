@@ -2,13 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { and, eq } from "drizzle-orm";
-import { getDb } from "@/lib/db";
-import { links } from "@/db/schema";
+import { prisma } from "@/lib/prisma";
+import { uniqueViolation } from "@/lib/prisma-errors";
 import { getCurrentUser } from "@/lib/dal";
 import { RESERVED_SLUGS, SLUG_RE, generateSlug, normalizeUrl } from "@/lib/links";
 
 const MAX_NAME = 60;
+const UUID_RE = /^[0-9a-f-]{36}$/i; // anything else would make Postgres fail on the uuid cast
 
 export type LinkState =
   | {
@@ -43,16 +43,13 @@ export async function createLink(_prev: LinkState, formData: FormData): Promise<
   for (let attempt = 0; attempt < (alias ? 1 : 5); attempt++) {
     const slug = alias || generateSlug();
     try {
-      await getDb()
-        .insert(links)
-        .values({ userId: user.id, name: name || null, slug, targetUrl });
+      await prisma.link.create({ data: { userId: user.id, name: name || null, slug, targetUrl } });
       revalidatePath("/dashboard");
       revalidatePath("/dashboard/links");
       revalidatePath("/admin");
       return { success: true, slug };
     } catch (err) {
-      const e = ((err as { cause?: unknown }).cause ?? err) as { code?: string };
-      if (e.code === "23505") {
+      if (uniqueViolation(err)) {
         if (alias) return { errors: { slug: "That alias is already taken." }, values };
         continue;
       }
@@ -67,9 +64,13 @@ export async function deleteLink(formData: FormData) {
   const user = await getCurrentUser();
   if (!user) return;
   const id = String(formData.get("id") ?? "");
-  // Soft delete: owners deactivate their own links; admins can deactivate any.
-  const where = user.role === "admin" ? eq(links.id, id) : and(eq(links.id, id), eq(links.userId, user.id));
-  await getDb().update(links).set({ isActive: false }).where(and(where, eq(links.isActive, true)));
+  if (UUID_RE.test(id)) {
+    // Soft delete: owners deactivate their own links; admins can deactivate any.
+    await prisma.link.updateMany({
+      where: { id, isActive: true, ...(user.role === "admin" ? {} : { userId: user.id }) },
+      data: { isActive: false },
+    });
+  }
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/links");
   revalidatePath("/admin");
@@ -94,18 +95,15 @@ export async function updateLink(id: string, _prev: LinkState, formData: FormDat
   else if (RESERVED_SLUGS.has(alias.toLowerCase())) errors.slug = "That alias is reserved.";
   if (Object.keys(errors).length || !targetUrl) return { errors, values };
 
-  const owned = user.role === "admin" ? eq(links.id, id) : and(eq(links.id, id), eq(links.userId, user.id));
-  const where = and(owned, eq(links.isActive, true));
+  if (!UUID_RE.test(id)) return { errors: { form: "Link not found." }, values };
   try {
-    const updated = await getDb()
-      .update(links)
-      .set({ name: name || null, slug: alias, targetUrl })
-      .where(where)
-      .returning({ id: links.id });
-    if (!updated.length) return { errors: { form: "Link not found." }, values };
+    const { count } = await prisma.link.updateMany({
+      where: { id, isActive: true, ...(user.role === "admin" ? {} : { userId: user.id }) }, // owner (or admin) only
+      data: { name: name || null, slug: alias, targetUrl },
+    });
+    if (!count) return { errors: { form: "Link not found." }, values };
   } catch (err) {
-    const e = ((err as { cause?: unknown }).cause ?? err) as { code?: string };
-    if (e.code === "23505") return { errors: { slug: "That alias is already taken." }, values };
+    if (uniqueViolation(err)) return { errors: { slug: "That alias is already taken." }, values };
     console.error("Update link failed:", err);
     return { errors: { form: "Something went wrong. Please try again." }, values };
   }

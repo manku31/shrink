@@ -1,7 +1,6 @@
 import "server-only";
-import { and, asc, desc, eq, gt, gte, ilike, inArray, or, sql } from "drizzle-orm";
-import { getDb } from "./db";
-import { linkClicks, links } from "@/db/schema";
+import { Prisma } from "@/generated/prisma/client";
+import { prisma } from "./prisma";
 import { LINKS_PAGE_SIZE, type LinkFilter, type LinkSort } from "./link-options";
 
 export type DayPoint = { date: string; clicks: number };
@@ -15,34 +14,31 @@ function dayRange(days: number): string[] {
   return Array.from({ length: days }, (_, i) => isoDay(new Date(today - (days - 1 - i) * DAY_MS)));
 }
 
-function fillDays(rows: { day: string; n: number }[], days: number): DayPoint[] {
+type DayRow = { day: string; n: number };
+
+function fillDays(rows: DayRow[], days: number): DayPoint[] {
   const byDay = new Map(rows.map((r) => [r.day, r.n]));
   return dayRange(days).map((date) => ({ date, clicks: byDay.get(date) ?? 0 }));
 }
 
-const dayExpr = sql<string>`to_char(${linkClicks.clickedAt} at time zone 'UTC', 'YYYY-MM-DD')`;
+const linkSelect = { id: true, name: true, slug: true, targetUrl: true, clicks: true, createdAt: true } as const;
 
 export async function getOverview(userId: string, days = 14) {
-  const db = getDb();
   const since = new Date(Date.parse(isoDay(new Date())) - (days - 1) * DAY_MS);
 
-  // One round trip: both queries run in parallel (the click query uses a subselect, not the first result).
+  // One round trip: both queries run in parallel.
   const [userLinks, rows] = await Promise.all([
-    db
-      .select({ id: links.id, name: links.name, slug: links.slug, targetUrl: links.targetUrl, clicks: links.clicks, createdAt: links.createdAt })
-      .from(links)
-      .where(and(eq(links.userId, userId), eq(links.isActive, true)))
-      .orderBy(desc(links.createdAt)),
-    db
-      .select({ day: dayExpr, n: sql<number>`count(*)::int` })
-      .from(linkClicks)
-      .where(
-        and(
-          inArray(linkClicks.linkId, db.select({ id: links.id }).from(links).where(and(eq(links.userId, userId), eq(links.isActive, true)))),
-          gte(linkClicks.clickedAt, since),
-        ),
-      )
-      .groupBy(dayExpr),
+    prisma.link.findMany({
+      where: { userId, isActive: true },
+      select: linkSelect,
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.$queryRaw<DayRow[]>`
+      select to_char(c.clicked_at at time zone 'UTC', 'YYYY-MM-DD') as day, count(*)::int as n
+      from link_clicks c
+      join links l on l.id = c.link_id
+      where l.user_id = ${userId}::uuid and l.is_active and c.clicked_at >= ${since}
+      group by 1`,
   ]);
   const series = fillDays(rows, days);
 
@@ -55,27 +51,25 @@ export async function getOverview(userId: string, days = 14) {
 export async function getLinkDetail(userId: string, linkId: string, days = 30) {
   // Not a UUID -> not found (avoids a Postgres cast error on bad URLs).
   if (!/^[0-9a-f-]{36}$/i.test(linkId)) return null;
-  const db = getDb();
   const since = new Date(Date.parse(isoDay(new Date())) - (days - 1) * DAY_MS);
   // All three queries in parallel (one round trip). Ownership is enforced by the first;
   // if it finds nothing, the click data is discarded.
-  const [[link], rows, recent] = await Promise.all([
-    db
-      .select({ id: links.id, name: links.name, slug: links.slug, targetUrl: links.targetUrl, clicks: links.clicks, createdAt: links.createdAt })
-      .from(links)
-      .where(and(eq(links.id, linkId), eq(links.userId, userId), eq(links.isActive, true))) // owner only
-      .limit(1),
-    db
-      .select({ day: dayExpr, n: sql<number>`count(*)::int` })
-      .from(linkClicks)
-      .where(and(eq(linkClicks.linkId, linkId), gte(linkClicks.clickedAt, since)))
-      .groupBy(dayExpr),
-    db
-      .select({ at: linkClicks.clickedAt })
-      .from(linkClicks)
-      .where(eq(linkClicks.linkId, linkId))
-      .orderBy(desc(linkClicks.clickedAt))
-      .limit(10),
+  const [link, rows, recent] = await Promise.all([
+    prisma.link.findFirst({
+      where: { id: linkId, userId, isActive: true }, // owner only
+      select: linkSelect,
+    }),
+    prisma.$queryRaw<DayRow[]>`
+      select to_char(clicked_at at time zone 'UTC', 'YYYY-MM-DD') as day, count(*)::int as n
+      from link_clicks
+      where link_id = ${linkId}::uuid and clicked_at >= ${since}
+      group by 1`,
+    prisma.linkClick.findMany({
+      where: { linkId },
+      select: { clickedAt: true },
+      orderBy: { clickedAt: "desc" },
+      take: 10,
+    }),
   ]);
   if (!link) return null;
   const series = fillDays(rows, days);
@@ -85,68 +79,71 @@ export async function getLinkDetail(userId: string, linkId: string, days = 30) {
     days,
     last7: series.slice(-7).reduce((n, p) => n + p.clicks, 0),
     periodClicks: series.reduce((n, p) => n + p.clicks, 0),
-    recent: recent.map((r) => r.at),
+    recent: recent.map((r) => r.clickedAt),
   };
 }
 
 /** Escape LIKE wildcards so user input is matched literally. */
 const likeEscape = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
+// Fixed list of ORDER BY clauses (never built from user input).
+const ORDER_BY: Record<LinkSort, Prisma.Sql> = {
+  newest: Prisma.sql`created_at desc`,
+  oldest: Prisma.sql`created_at asc`,
+  most: Prisma.sql`clicks desc, created_at desc`,
+  least: Prisma.sql`clicks asc, created_at desc`,
+  az: Prisma.sql`lower(coalesce(name, slug)) asc`,
+};
+
+type SearchRow = {
+  id: string;
+  name: string | null;
+  slug: string;
+  targetUrl: string;
+  clicks: number;
+  createdAt: Date;
+  lastClickedAt: Date | null;
+  matching: number;
+};
+
 export async function searchLinks(
   userId: string,
   opts: { q: string; sort: LinkSort; filter: LinkFilter; page: number },
 ) {
-  const db = getDb();
   const q = opts.q.trim().slice(0, 100);
   const pattern = `%${likeEscape(q)}%`;
-  const where = and(
-    eq(links.userId, userId),
-    eq(links.isActive, true),
-    q ? or(ilike(links.name, pattern), ilike(links.slug, pattern), ilike(links.targetUrl, pattern)) : undefined,
-    opts.filter === "clicked" ? gt(links.clicks, 0) : opts.filter === "unclicked" ? eq(links.clicks, 0) : undefined,
-  );
-  const order = {
-    newest: [desc(links.createdAt)],
-    oldest: [asc(links.createdAt)],
-    most: [desc(links.clicks), desc(links.createdAt)],
-    least: [asc(links.clicks), desc(links.createdAt)],
-    az: [asc(sql`lower(coalesce(${links.name}, ${links.slug}))`)],
-  }[opts.sort];
-
+  const conditions = [Prisma.sql`user_id = ${userId}::uuid`, Prisma.sql`is_active`];
+  if (q) conditions.push(Prisma.sql`(name ilike ${pattern} or slug ilike ${pattern} or target_url ilike ${pattern})`);
+  if (opts.filter === "clicked") conditions.push(Prisma.sql`clicks > 0`);
+  if (opts.filter === "unclicked") conditions.push(Prisma.sql`clicks = 0`);
+  const where = Prisma.join(conditions, " and ");
+  const orderBy = ORDER_BY[opts.sort];
   const pageSize = LINKS_PAGE_SIZE;
+
   const fetchPage = (page: number) =>
-    db
-      .select({
-        id: links.id,
-        name: links.name,
-        slug: links.slug,
-        targetUrl: links.targetUrl,
-        clicks: links.clicks,
-        createdAt: links.createdAt,
-        lastClickedAt: sql<Date | null>`(select max(${linkClicks.clickedAt}) from ${linkClicks} where ${linkClicks.linkId} = ${links.id})`.mapWith(
-          (v) => (v ? new Date(v) : null),
-        ),
-        matching: sql<number>`count(*) over ()::int`,
-      })
-      .from(links)
-      .where(where)
-      .orderBy(...order)
-      .limit(pageSize)
-      .offset((page - 1) * pageSize);
+    prisma.$queryRaw<SearchRow[]>`
+      select id, name, slug, target_url as "targetUrl", clicks, created_at as "createdAt",
+             (select max(clicked_at) from link_clicks where link_id = links.id) as "lastClickedAt",
+             count(*) over ()::int as matching
+      from links
+      where ${where}
+      order by ${orderBy}
+      limit ${pageSize} offset ${(page - 1) * pageSize}`;
   const fetchTotals = () =>
-    db
-      .select({ n: sql<number>`count(*)::int`, clicks: sql<number>`coalesce(sum(${links.clicks}), 0)::int` })
-      .from(links)
-      .where(and(eq(links.userId, userId), eq(links.isActive, true)));
+    prisma.link.aggregate({
+      where: { userId, isActive: true },
+      _count: { _all: true },
+      _sum: { clicks: true },
+    });
 
   // One round trip: the page of rows (with the match count as a window total) and the overall totals in parallel.
   let page = Math.max(1, opts.page);
-  const [firstRows, [all]] = await Promise.all([fetchPage(page), fetchTotals()]);
+  const [firstRows, all] = await Promise.all([fetchPage(page), fetchTotals()]);
   let pageRows = firstRows;
   let matching = pageRows[0]?.matching ?? 0;
   // Asked for a page past the end: fall back to the last real page (rare, so the extra query is fine).
   if (pageRows.length === 0 && page > 1) {
-    const lastPage = Math.max(1, Math.ceil(all.n / pageSize));
+    const lastPage = Math.max(1, Math.ceil(all._count._all / pageSize));
     page = Math.min(page, lastPage);
     pageRows = await fetchPage(page);
     matching = pageRows[0]?.matching ?? 0;
@@ -157,6 +154,14 @@ export async function searchLinks(
     }
   }
   const pages = Math.max(1, Math.ceil(matching / pageSize));
-  const rows = pageRows.map((r) => ({ id: r.id, name: r.name, slug: r.slug, targetUrl: r.targetUrl, clicks: r.clicks, createdAt: r.createdAt, lastClickedAt: r.lastClickedAt }));
-  return { rows, matching, total: all.n, totalClicks: all.clicks, page, pages };
+  const rows = pageRows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    slug: r.slug,
+    targetUrl: r.targetUrl,
+    clicks: r.clicks,
+    createdAt: r.createdAt,
+    lastClickedAt: r.lastClickedAt,
+  }));
+  return { rows, matching, total: all._count._all, totalClicks: all._sum.clicks ?? 0, page, pages };
 }

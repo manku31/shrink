@@ -1,9 +1,8 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { eq, sql } from "drizzle-orm";
-import { getDb } from "@/lib/db";
-import { users } from "@/db/schema";
+import { prisma } from "@/lib/prisma";
+import { uniqueViolation } from "@/lib/prisma-errors";
 import { DUMMY_HASH, hashPassword, verifyPassword } from "@/lib/password";
 import { createSession, deleteSession } from "@/lib/session";
 import { homePathFor } from "@/lib/dal";
@@ -35,18 +34,17 @@ export async function signup(_prev: AuthState, formData: FormData): Promise<Auth
   try {
     // NOTE: `role` is deliberately not set: the DB default ('user') always applies.
     // Nothing from the form can ever create an admin.
-    const [created] = await getDb()
-      .insert(users)
-      .values({ username, email, passwordHash: await hashPassword(password) })
-      .returning({ id: users.id });
+    const created = await prisma.user.create({
+      data: { username, email, passwordHash: await hashPassword(password) },
+      select: { id: true },
+    });
     userId = created.id;
   } catch (err) {
-    // Drizzle wraps the driver error; the Postgres error (code, constraint) is on `cause`.
-    const e = ((err as { cause?: unknown }).cause ?? err) as { code?: string; constraint?: string };
-    if (e.code === "23505") {
+    const constraint = uniqueViolation(err);
+    if (constraint) {
       return {
         errors:
-          e.constraint === "users_username_lower_idx"
+          constraint === "users_username_lower_idx"
             ? { username: "That username is taken." }
             : { email: "An account with this email already exists." },
         values,
@@ -69,11 +67,10 @@ export async function login(_prev: AuthState, formData: FormData): Promise<AuthS
     return { errors: { form: "Enter your email and password." }, values };
   }
 
-  const [user] = await getDb()
-    .select({ id: users.id, role: users.role, passwordHash: users.passwordHash, isActive: users.isActive })
-    .from(users)
-    .where(eq(sql`lower(${users.email})`, email))
-    .limit(1);
+  const user = await prisma.user.findFirst({
+    where: { email: { equals: email, mode: "insensitive" } }, // emails are unique ignoring case
+    select: { id: true, role: true, passwordHash: true, isActive: true },
+  });
 
   // Always run a hash comparison so timing doesn't reveal whether the email exists.
   const ok = await verifyPassword(password, user?.passwordHash ?? DUMMY_HASH);
