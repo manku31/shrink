@@ -1,29 +1,80 @@
 import { after, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { redis } from "@/lib/redis";
 import { RESERVED_SLUGS, SLUG_RE } from "@/lib/links";
 
+type Target = { id: string; url: string } | null; // null = "no such link"
+
+const TTL = 60 * 60; // found: 1 hour
+const MISS_TTL = 60; // not found: 1 minute (stops bad URLs hammering the DB)
+
+async function findTarget(slug: string): Promise<Target> {
+  const key = `link:${slug}`;
+
+  // 1) Redis first. Any Redis problem is ignored and we use the DB.
+  try {
+    const hit = await redis.get(key);
+    if (hit !== null) return JSON.parse(hit) as Target; // hit: {id, url} or null
+  } catch (err) {
+    console.error("Redis error:", err);
+  }
+
+  // 2) Miss: ask Postgres (link active AND owner active)
+  const link = await prisma.link.findFirst({
+    where: {
+      slug,
+      isActive: true,
+      user: { isActive: true },
+    },
+    select: { id: true, targetUrl: true },
+  });
+
+  const target: Target = link ? { id: link.id, url: link.targetUrl } : null;
+
+  // 3) Save it for next time in redis
+  try {
+    await redis.set(
+      `link:${slug}`,
+      JSON.stringify(target),
+      "EX",
+      target ? TTL : MISS_TTL,
+    );
+  } catch (err) {
+    console.error("Redis error saving link:", err);
+  }
+
+  return target;
+}
+
 // Public short-link redirect: GET /{slug} -> target URL (counts the click).
-export async function GET(request: Request, { params }: { params: Promise<{ slug: string }> }) {
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ slug: string }> },
+) {
   const { slug } = await params;
   if (!SLUG_RE.test(slug) || RESERVED_SLUGS.has(slug.toLowerCase())) {
     return new NextResponse("Not found", { status: 404 });
   }
-  // One query: count the click and fetch the target, but only for an active link with an active owner.
-  const [link] = await prisma.$queryRaw<{ id: string; targetUrl: string }[]>`
-    update links set clicks = clicks + 1
-    where slug = ${slug} and is_active
-      and exists (select 1 from users where users.id = links.user_id and users.is_active)
-    returning id, target_url as "targetUrl"`;
-  if (!link) return new NextResponse("Short link not found", { status: 404 });
-  // Record the click for analytics after the redirect is sent, so it adds no latency.
-  // Never let a logging failure break the redirect.
+
+  const target = await findTarget(slug);
+  if (!target) return new NextResponse("Short link not found", { status: 404 });
+
   after(async () => {
     try {
-      await prisma.linkClick.create({ data: { linkId: link.id } });
+      await prisma.link.update({
+        where: { id: target.id },
+        data: { clicks: { increment: 1 } },
+      });
+
+      await prisma.linkClick.create({
+        data: {
+          linkId: target.id,
+        },
+      });
     } catch (err) {
-      console.error("Click log failed:", err);
+      console.error("Error in click log:", err);
     }
   });
-  // 307 (temporary) so browsers don't cache it and skip click counting.
-  return NextResponse.redirect(link.targetUrl, 307);
+
+  return NextResponse.redirect(target.url, 307);
 }
